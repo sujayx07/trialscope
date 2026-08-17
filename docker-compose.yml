@@ -1,0 +1,116 @@
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  dns:
+    - 8.8.8.8
+    - 8.8.4.4
+  env_file:
+    - .env
+  environment:
+    - REDIS_URL=redis://redis:6379/0
+    - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    - FRONTEND_URL=http://localhost:3000
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    <<: *backend-common
+    ports:
+      - "8000:8000"
+    command: python start.py
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  celery_worker:
+    <<: *backend-common
+    command: celery -A tasks.celery_worker worker --loglevel=info --concurrency=2
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_beat:
+    <<: *backend-common
+    command: celery -A tasks.celery_worker beat --loglevel=info --scheduler celery.beat:PersistentScheduler
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: trialscope-technoverse-frontend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        INTERNAL_API_URL: http://backend:8000
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - INTERNAL_API_URL=http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000', r => process.exit(r.statusCode >= 200 && r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    profiles:
+      - caddy
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+  caddy_data:
+  caddy_config:
