@@ -1,3 +1,7 @@
+<p align="center">
+	<img src="public/trialscope.png" alt="TrialGo logo" width="120" />
+</p>
+
 # TrialGo
 
 > AI-powered clinical trial recruitment, patient monitoring, consent handling, and FHIR-ready enrollment in one stack.
